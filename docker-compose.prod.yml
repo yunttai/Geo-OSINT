@@ -1,0 +1,33 @@
+services:
+  web:
+    image: ${DOCKERHUB_USERNAME}/mjsec-geo-osint:${IMAGE_TAG}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+    expose:
+      - "3000"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./certbot/config:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - ./certbot/config:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
