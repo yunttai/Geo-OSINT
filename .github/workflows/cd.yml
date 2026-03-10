@@ -24,6 +24,8 @@ jobs:
           context: .
           file: Dockerfile.prod
           push: true
+          build-args: |
+            NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${{ secrets.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }}
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/mjsec-geo-osint:${{ github.sha }}
             ${{ secrets.DOCKERHUB_USERNAME }}/mjsec-geo-osint:latest
@@ -75,7 +77,7 @@ jobs:
           : "${DOCKERHUB_USERNAME:?}"
 
           mkdir -p "$REMOTE_DIR"/{nginx,certbot/{config,www,logs}}
-          [ -f "$REMOTE_DIR/.env" ] || touch "$REMOTE_DIR/.env"
+          printf 'NODE_ENV=production\nHOSTNAME=0.0.0.0\nPORT=3000\n' > "$REMOTE_DIR/.env"
 
           printf 'DOMAIN=%s\nLETSENCRYPT_EMAIL=%s\nIMAGE_TAG=%s\nDOCKERHUB_USERNAME=%s\n' \
             "$DOMAIN" "$LETSENCRYPT_EMAIL" "$IMAGE_TAG" "$DOCKERHUB_USERNAME" > "$REMOTE_DIR/.deploy.env"
