@@ -21,7 +21,7 @@ npm install
 2. `.env.local`에 아래 값을 넣습니다.
 
 ```bash
-NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_browser_key
+GOOGLE_MAPS_API_KEY=your_browser_key
 ```
 
 3. 개발 서버를 실행합니다.
@@ -35,7 +35,7 @@ npm run dev
 1. Google Cloud 프로젝트를 만들고 결제를 활성화합니다.
 2. `Maps JavaScript API`를 켭니다.
 3. 브라우저 키를 만들고 HTTP referrer를 제한합니다.
-4. 발급한 키를 `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`에 넣습니다.
+4. 발급한 키를 `GOOGLE_MAPS_API_KEY`에 넣습니다.
 
 ## 동작 방식
 
@@ -75,7 +75,7 @@ const featureCards = [
 
 const setupChecklist = [
   "Google Cloud에서 Maps JavaScript API를 켜고 브라우저 키를 발급합니다.",
-  "`.env.local`에 `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`를 넣습니다.",
+  "`.env.local`에 `GOOGLE_MAPS_API_KEY`를 넣습니다.",
   "개발 서버를 띄운 뒤 지도에서 위치를 찍고 결과 창을 확인합니다.",
   "별도 로그인이나 DB 설정 없이 그대로 배포 가능합니다.",
 ];
