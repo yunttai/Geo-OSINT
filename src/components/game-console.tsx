@@ -1,83 +1,101 @@
 "use client";
 
+import Image from "next/image";
 import Script from "next/script";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { scoreGuess } from "@/lib/game/scoring";
 import type { Coordinates, GuessResult, PublicRound } from "@/types/game";
 
 type GameConsoleProps = {
   googleMapsApiKey: string;
   googleMapsEnabled: boolean;
-  supabaseEnabled: boolean;
 };
 
-type GuessDraft = {
-  lat: string;
-  lng: string;
-};
+type Screen = "intro" | "game" | "result";
+const ROUND_TIME_LIMIT_MS = 60_000;
 
-function getFeedbackLabel(result: GuessResult | null) {
-  switch (result?.feedback) {
-    case "perfect":
-      return "Nearly exact";
-    case "strong":
-      return "Strong regional read";
-    case "decent":
-      return "Country-level hit";
-    case "wide":
-      return "You need more clues";
-    default:
-      return "Waiting for your guess";
-  }
+function formatRemainingTime(remainingMs: number) {
+  const totalSeconds = Math.ceil(remainingMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function parseGuess(draft: GuessDraft): Coordinates | null {
-  const lat = Number(draft.lat);
-  const lng = Number(draft.lng);
+function BrandMark({
+  compact = false,
+  onClick,
+}: {
+  compact?: boolean;
+  onClick?: () => void;
+}) {
+  const content = (
+    <>
+      <div className={`relative overflow-hidden rounded-2xl bg-white/8 ${compact ? "h-12 w-12" : "h-18 w-18"}`}>
+        <Image
+          src="/mjsec-logo.svg"
+          alt="MJSEC Geo-OSINT logo"
+          fill
+          className="object-contain p-2"
+          priority
+        />
+      </div>
+      <div className={compact ? "text-left" : "text-center"}>
+        <p className="eyebrow text-xs text-[var(--accent-200)]">MJSEC</p>
+        <h1 className={`${compact ? "mt-1 text-2xl" : "mt-2 text-4xl sm:text-5xl"} font-semibold tracking-[-0.05em] text-white`}>
+          Geo-OSINT
+        </h1>
+      </div>
+    </>
+  );
 
-  if (
-    Number.isNaN(lat) ||
-    Number.isNaN(lng) ||
-    lat < -90 ||
-    lat > 90 ||
-    lng < -180 ||
-    lng > 180
-  ) {
-    return null;
+  if (!onClick) {
+    return (
+      <div className={`flex items-center justify-center gap-3 ${compact ? "justify-start" : ""}`}>
+        {content}
+      </div>
+    );
   }
 
-  return { lat, lng };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="처음으로 돌아가기"
+      className={`flex items-center justify-center gap-3 rounded-[1.5rem] transition hover:opacity-90 ${compact ? "justify-start" : ""}`}
+    >
+      {content}
+    </button>
+  );
 }
 
-export function GameConsole({
-  googleMapsApiKey,
-  googleMapsEnabled,
-  supabaseEnabled,
-}: GameConsoleProps) {
+export function GameConsole({ googleMapsApiKey, googleMapsEnabled }: GameConsoleProps) {
   const panoramaContainerRef = useRef<HTMLDivElement>(null);
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const panoramaRef = useRef<google.maps.StreetViewPanorama | null>(null);
-  const markerRef = useRef<google.maps.Marker | null>(null);
+  const guessMapContainerRef = useRef<HTMLDivElement>(null);
+  const resultMapContainerRef = useRef<HTMLDivElement>(null);
+  const guessMapRef = useRef<google.maps.Map | null>(null);
+  const resultMapRef = useRef<google.maps.Map | null>(null);
+  const guessMarkerRef = useRef<google.maps.Marker | null>(null);
+  const resultGuessMarkerRef = useRef<google.maps.Marker | null>(null);
+  const resultAnswerMarkerRef = useRef<google.maps.Marker | null>(null);
+  const resultLineRef = useRef<google.maps.Polyline | null>(null);
   const clickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
+  const roundRequestIdRef = useRef(0);
 
+  const [screen, setScreen] = useState<Screen>("intro");
   const [round, setRound] = useState<PublicRound | null>(null);
+  const [guess, setGuess] = useState<Coordinates | null>(null);
   const [result, setResult] = useState<GuessResult | null>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [loadingRound, setLoadingRound] = useState(false);
   const [mapsReady, setMapsReady] = useState(false);
   const [mapsError, setMapsError] = useState<string | null>(null);
-  const [loadingRound, setLoadingRound] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [guess, setGuess] = useState<Coordinates | null>(null);
-  const [guessDraft, setGuessDraft] = useState<GuessDraft>({ lat: "", lng: "" });
-  const [message, setMessage] = useState("Fresh round. Pan the scene, click the map, then submit.");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [remainingMs, setRemainingMs] = useState(ROUND_TIME_LIMIT_MS);
+  const [timeoutHandled, setTimeoutHandled] = useState(false);
+  const [submittedByTimeout, setSubmittedByTimeout] = useState(false);
 
-  const parsedManualGuess = useMemo(() => parseGuess(guessDraft), [guessDraft]);
-  const activeGuess = parsedManualGuess || guess;
-
-  async function loadRound(excludedRoundIds: string[] = []) {
-    setLoadingRound(true);
-    setMessage("Generating a new round...");
-
+  async function fetchRound(excludedRoundIds: string[] = []) {
     const params = new URLSearchParams();
 
     if (excludedRoundIds.length) {
@@ -93,45 +111,94 @@ export function GameConsole({
     }
 
     const payload = (await response.json()) as { round: PublicRound };
-    setRound(payload.round);
-    setResult(null);
+    return payload.round;
+  }
+
+  async function startRound(excludedRoundIds: string[] = []) {
+    const requestId = ++roundRequestIdRef.current;
+    setLoadingRound(true);
+    setErrorMessage(null);
+
+    try {
+      const nextRound = await fetchRound(excludedRoundIds);
+
+      if (requestId !== roundRequestIdRef.current) {
+        return;
+      }
+
+      setRound(nextRound);
+      setGuess(null);
+      setResult(null);
+      setStartedAt(Date.now());
+      setRemainingMs(ROUND_TIME_LIMIT_MS);
+      setTimeoutHandled(false);
+      setSubmittedByTimeout(false);
+      setScreen("game");
+    } catch {
+      if (requestId !== roundRequestIdRef.current) {
+        return;
+      }
+
+      setErrorMessage("라운드를 불러오지 못했습니다.");
+    } finally {
+      if (requestId === roundRequestIdRef.current) {
+        setLoadingRound(false);
+      }
+    }
+  }
+
+  function handleBackToIntro(message: string | null = null) {
+    roundRequestIdRef.current += 1;
+    setLoadingRound(false);
+    setRound(null);
     setGuess(null);
-    setGuessDraft({ lat: "", lng: "" });
-    setStartedAt(Date.now());
-    setMessage("Fresh round. Pan the scene, click the map, then submit.");
+    setResult(null);
+    setStartedAt(null);
+    setRemainingMs(ROUND_TIME_LIMIT_MS);
+    setTimeoutHandled(false);
+    setSubmittedByTimeout(false);
+    setErrorMessage(message);
+    setScreen("intro");
   }
 
   useEffect(() => {
-    loadRound()
-      .catch(() => {
-        setMessage("Round generation failed. Check the API route.");
-      })
-      .finally(() => {
-        setLoadingRound(false);
-      });
-  }, []);
+    if (screen !== "game" || !startedAt) {
+      return;
+    }
+
+    const deadline = startedAt + ROUND_TIME_LIMIT_MS;
+
+    const updateRemainingTime = () => {
+      setRemainingMs(Math.max(0, deadline - Date.now()));
+    };
+
+    updateRemainingTime();
+
+    const intervalId = window.setInterval(updateRemainingTime, 250);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [screen, startedAt]);
 
   useEffect(() => {
-    if (!mapsReady || !round || !window.google || !panoramaContainerRef.current || !mapContainerRef.current) {
+    if (!mapsReady || !round || screen !== "game" || !window.google || !panoramaContainerRef.current || !guessMapContainerRef.current) {
       return;
     }
 
     clickListenerRef.current?.remove();
 
-    panoramaRef.current = new window.google.maps.StreetViewPanorama(
-      panoramaContainerRef.current,
-      {
-        position: round.position,
-        pov: round.pov,
-        zoom: round.pov.zoom,
-        addressControl: false,
-        fullscreenControl: false,
-        motionTracking: false,
-        showRoadLabels: false,
-      },
-    );
+    new window.google.maps.StreetViewPanorama(panoramaContainerRef.current, {
+      position: round.position,
+      pov: round.pov,
+      zoom: round.pov.zoom,
+      addressControl: false,
+      fullscreenControl: false,
+      motionTracking: false,
+      showRoadLabels: false,
+    });
 
-    mapRef.current = new window.google.maps.Map(mapContainerRef.current, {
+    guessMapRef.current = new window.google.maps.Map(guessMapContainerRef.current, {
       center: { lat: 20, lng: 8 },
       zoom: 2,
       minZoom: 2,
@@ -141,13 +208,13 @@ export function GameConsole({
       gestureHandling: "greedy",
     });
 
-    markerRef.current = new window.google.maps.Marker({
-      map: mapRef.current,
+    guessMarkerRef.current = new window.google.maps.Marker({
+      map: guessMapRef.current,
       visible: false,
     });
 
-    clickListenerRef.current = mapRef.current.addListener("click", (event: google.maps.MapMouseEvent) => {
-      if (!event.latLng || !markerRef.current) {
+    clickListenerRef.current = guessMapRef.current.addListener("click", (event: google.maps.MapMouseEvent) => {
+      if (!event.latLng || !guessMarkerRef.current) {
         return;
       }
 
@@ -156,235 +223,240 @@ export function GameConsole({
         lng: Number(event.latLng.lng().toFixed(5)),
       };
 
-      markerRef.current.setPosition(nextGuess);
-      markerRef.current.setVisible(true);
+      guessMarkerRef.current.setPosition(nextGuess);
+      guessMarkerRef.current.setVisible(true);
       setGuess(nextGuess);
-      setGuessDraft({
-        lat: nextGuess.lat.toFixed(5),
-        lng: nextGuess.lng.toFixed(5),
-      });
-      setMessage("Guess locked. Submit when you're ready.");
     });
 
     return () => {
       clickListenerRef.current?.remove();
     };
-  }, [mapsReady, round]);
+  }, [mapsReady, round, screen]);
 
-  async function handleSubmit() {
-    if (!round || !activeGuess || !startedAt) {
-      setMessage("Add a valid guess first.");
+  useEffect(() => {
+    if (!mapsReady || !result || screen !== "result" || !window.google || !resultMapContainerRef.current) {
       return;
     }
 
-    setSubmitting(true);
-    setMessage("Scoring your guess...");
+    resultMapRef.current = new window.google.maps.Map(resultMapContainerRef.current, {
+      center: result.answer.coordinates,
+      zoom: 3,
+      streetViewControl: false,
+      mapTypeControl: false,
+      fullscreenControl: false,
+      gestureHandling: "greedy",
+    });
 
-    try {
-      const response = await fetch("/api/game/guess", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          token: round.token,
-          guess: activeGuess,
-          elapsedMs: Date.now() - startedAt,
-        }),
-      });
+    resultGuessMarkerRef.current?.setMap(null);
+    resultAnswerMarkerRef.current?.setMap(null);
+    resultLineRef.current?.setMap(null);
 
-      if (!response.ok) {
-        throw new Error("Failed to score guess.");
-      }
+    resultGuessMarkerRef.current = new window.google.maps.Marker({
+      map: resultMapRef.current,
+      position: result.guess,
+      label: "G",
+      title: "내가 찍은 위치",
+    });
 
-      const payload = (await response.json()) as { result: GuessResult };
-      setResult(payload.result);
-      setMessage(
-        payload.result.savedToLeaderboard
-          ? "Guess saved to Supabase leaderboard."
-          : "Guess scored locally. Sign in to persist results.",
-      );
-    } catch {
-      setMessage("Scoring failed. Check your environment variables and API route.");
-    } finally {
-      setSubmitting(false);
+    resultAnswerMarkerRef.current = new window.google.maps.Marker({
+      map: resultMapRef.current,
+      position: result.answer.coordinates,
+      label: "A",
+      title: "정답 위치",
+    });
+
+    resultLineRef.current = new window.google.maps.Polyline({
+      map: resultMapRef.current,
+      path: [result.guess, result.answer.coordinates],
+      strokeColor: "#ff8f3f",
+      strokeOpacity: 0.9,
+      strokeWeight: 3,
+    });
+
+    if (result.distanceKm < 1) {
+      resultMapRef.current.setCenter(result.answer.coordinates);
+      resultMapRef.current.setZoom(14);
+      return;
     }
+
+    const bounds = new window.google.maps.LatLngBounds();
+    bounds.extend(result.guess);
+    bounds.extend(result.answer.coordinates);
+    resultMapRef.current.fitBounds(bounds, 72);
+  }, [mapsReady, result, screen]);
+
+  function handleSubmit(elapsedOverrideMs?: number, isTimeout = false) {
+    if (!round || !guess || !startedAt) {
+      return;
+    }
+
+    const nextResult: GuessResult = {
+      ...scoreGuess({
+        answer: round.position,
+        guess,
+        elapsedMs: elapsedOverrideMs ?? Date.now() - startedAt,
+      }),
+      answer: {
+        id: round.id,
+        country: round.country,
+        region: round.region,
+        locationLabel: round.locationLabel,
+        coordinates: round.position,
+      },
+      guess,
+    };
+
+    setSubmittedByTimeout(isTimeout);
+    setResult(nextResult);
+    setScreen("result");
   }
 
-  async function handleNextRound() {
-    const excluded = round ? [round.id] : [];
-    setLoadingRound(true);
-
-    try {
-      await loadRound(excluded);
-    } catch {
-      setMessage("Could not load the next round.");
-    } finally {
-      setLoadingRound(false);
+  const handleTimeoutSubmit = useEffectEvent(() => {
+    if (round && guess && startedAt) {
+      handleSubmit(ROUND_TIME_LIMIT_MS, true);
+      return;
     }
-  }
+
+    handleBackToIntro("시간이 종료되었습니다. 위치를 선택하지 않아 라운드가 종료되었습니다.");
+  });
+
+  useEffect(() => {
+    if (screen !== "game" || remainingMs > 0 || timeoutHandled) {
+      return;
+    }
+
+    setTimeoutHandled(true);
+    handleTimeoutSubmit();
+  }, [remainingMs, screen, timeoutHandled]);
 
   return (
-    <section className="glass-panel rounded-[2rem] p-5 sm:p-6 lg:p-8">
+    <section className="w-full">
       {googleMapsEnabled ? (
         <Script
           id="google-maps-script"
           src={`https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}&v=weekly`}
           strategy="afterInteractive"
           onReady={() => setMapsReady(true)}
-          onError={() => setMapsError("Google Maps script failed to load. Check the browser-restricted key.")}
+          onError={() => setMapsError("Google Maps 스크립트를 불러오지 못했습니다.")}
         />
       ) : null}
 
-      <div className="flex flex-col gap-6 xl:flex-row">
-        <div className="flex-1 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="eyebrow text-xs text-[var(--accent-200)]">Live Round</p>
-              <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-white">
-                Street View first, architecture second
-              </h2>
-            </div>
+      {screen === "intro" ? (
+        <div className="glass-panel mx-auto max-w-3xl rounded-[2.2rem] px-6 py-10 text-center sm:px-10 sm:py-14">
+          <BrandMark />
+          <h2 className="mt-6 text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">
+            거리뷰를 보고 정답 위치를 맞히는 게임입니다.
+          </h2>
+          <p className="mt-5 text-base leading-8 text-[var(--ink-200)] sm:text-lg">
+            거리뷰를 확인한 뒤 지도에 위치를 찍고 제출하면, 결과 화면에서 내가 찍은 위치와 정답 위치 그리고
+            두 지점 사이의 거리를 확인할 수 있습니다.
+          </p>
+          <p className="mt-3 text-sm leading-7 text-[var(--accent-200)]">제한시간은 1분입니다.</p>
+          <div className="mt-8 flex justify-center">
             <button
               type="button"
-              onClick={handleNextRound}
+              onClick={() => void startRound()}
               disabled={loadingRound}
-              className="rounded-full border border-white/10 px-4 py-2 text-sm text-[var(--ink-200)] transition hover:border-[var(--accent-400)]/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex min-h-12 items-center justify-center rounded-full border border-[var(--accent-400)]/40 bg-[var(--accent-400)] px-6 text-sm font-semibold text-[var(--surface-950)] transition hover:bg-[var(--accent-300)] disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/10 disabled:text-[var(--ink-400)]"
             >
-              {loadingRound ? "Loading..." : "New round"}
+              {loadingRound ? "불러오는 중..." : "시작하기"}
             </button>
           </div>
+          {errorMessage ? <p className="mt-4 text-sm text-[var(--danger-300)]">{errorMessage}</p> : null}
+        </div>
+      ) : null}
 
-          <div className="maps-shell">
-            {googleMapsEnabled && !mapsError ? (
-              <div ref={panoramaContainerRef} className="h-[22rem] w-full md:h-[30rem]" />
-            ) : (
-              <div className="flex h-[22rem] items-center justify-center px-6 text-center text-sm leading-7 text-[var(--ink-200)] md:h-[30rem]">
-                Add `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`, enable Maps JavaScript API, and restrict the key to your Vercel
-                domain. The fallback UI keeps the round and score flow working without the panorama.
+      {screen === "game" ? (
+        <div className="space-y-4">
+          <div className="glass-panel rounded-[1.8rem] px-5 py-4">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <BrandMark compact onClick={handleBackToIntro} />
+              <div className="rounded-[1.25rem] border border-white/8 bg-[var(--surface-900)]/80 px-4 py-3 text-center sm:min-w-[8rem]">
+                <p className="eyebrow text-[11px] text-[var(--accent-200)]">Timer</p>
+                <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-white">
+                  {formatRemainingTime(remainingMs)}
+                </p>
               </div>
-            )}
+            </div>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-[1.4fr_0.9fr]">
+          <div className="grid gap-4 lg:grid-cols-2">
             <div className="maps-shell">
               {googleMapsEnabled && !mapsError ? (
-                <div ref={mapContainerRef} className="h-[18rem] w-full" />
+                <div ref={panoramaContainerRef} className="h-[28rem] w-full md:h-[36rem]" />
               ) : (
-                <div className="flex h-[18rem] items-center justify-center px-6 text-center text-sm leading-7 text-[var(--ink-200)]">
-                  No map widget yet. Enter latitude and longitude manually to keep testing the scoring path.
+                <div className="flex h-[28rem] items-center justify-center px-6 text-center text-sm leading-7 text-[var(--ink-200)] md:h-[36rem]">
+                  Google Maps 키가 없거나 로드에 실패해서 거리뷰를 표시할 수 없습니다.
                 </div>
               )}
             </div>
 
-            <div className="rounded-[1.5rem] border border-white/8 bg-[var(--surface-900)]/80 p-4">
-              <div className="space-y-4">
-                <div>
-                  <p className="panel-title text-white">Round brief</p>
-                  <p className="mt-2 text-sm leading-7 text-[var(--ink-200)]">
-                    {round?.clue || "Fetching a clue..."}
-                  </p>
+            <div className="maps-shell relative">
+              {googleMapsEnabled && !mapsError ? (
+                <div ref={guessMapContainerRef} className="h-[28rem] w-full md:h-[36rem]" />
+              ) : (
+                <div className="flex h-[28rem] items-center justify-center px-6 text-center text-sm leading-7 text-[var(--ink-200)] md:h-[36rem]">
+                  Google Maps 키가 없거나 로드에 실패해서 지도를 표시할 수 없습니다.
                 </div>
+              )}
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="space-y-2">
-                    <span className="text-xs text-[var(--ink-400)]">Latitude</span>
-                    <input
-                      value={guessDraft.lat}
-                      onChange={(event) =>
-                        {
-                          setGuess(null);
-                          setGuessDraft((current) => ({ ...current, lat: event.target.value }));
-                        }
-                      }
-                      className="w-full rounded-2xl border border-white/10 bg-[var(--surface-850)] px-3 py-3 text-sm outline-none transition focus:border-[var(--accent-400)]/40"
-                      placeholder="37.5665"
-                    />
-                  </label>
-                  <label className="space-y-2">
-                    <span className="text-xs text-[var(--ink-400)]">Longitude</span>
-                    <input
-                      value={guessDraft.lng}
-                      onChange={(event) =>
-                        {
-                          setGuess(null);
-                          setGuessDraft((current) => ({ ...current, lng: event.target.value }));
-                        }
-                      }
-                      className="w-full rounded-2xl border border-white/10 bg-[var(--surface-850)] px-3 py-3 text-sm outline-none transition focus:border-[var(--accent-400)]/40"
-                      placeholder="126.9780"
-                    />
-                  </label>
-                </div>
-
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={handleSubmit}
-                    disabled={submitting || !activeGuess}
-                    className="inline-flex min-h-12 items-center justify-center rounded-full border border-[var(--accent-400)]/40 bg-[var(--accent-400)] px-5 text-sm font-semibold text-[var(--surface-950)] transition hover:bg-[var(--accent-300)] disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/10 disabled:text-[var(--ink-400)]"
-                  >
-                    {submitting ? "Scoring..." : "Submit guess"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setGuess(null);
-                      setGuessDraft({ lat: "", lng: "" });
-                      markerRef.current?.setVisible(false);
-                      setMessage("Guess cleared.");
-                    }}
-                    className="inline-flex min-h-12 items-center justify-center rounded-full border border-white/10 px-5 text-sm text-[var(--ink-200)] transition hover:border-[var(--accent-400)]/40 hover:text-white"
-                  >
-                    Clear
-                  </button>
-                </div>
+              <div className="absolute inset-x-4 bottom-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => handleSubmit()}
+                  disabled={!guess}
+                  className="inline-flex min-h-12 items-center justify-center rounded-full border border-[var(--accent-400)]/40 bg-[var(--accent-400)] px-6 text-sm font-semibold text-[var(--surface-950)] shadow-[0_16px_32px_rgba(0,0,0,0.28)] transition hover:bg-[var(--accent-300)] disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/10 disabled:text-[var(--ink-400)]"
+                >
+                  제출
+                </button>
               </div>
             </div>
           </div>
         </div>
+      ) : null}
 
-        <aside className="w-full xl:max-w-[22rem]">
-          <div className="rounded-[1.75rem] border border-white/8 bg-[var(--surface-900)]/82 p-5">
-            <p className="eyebrow text-xs text-[var(--accent-200)]">Round Ops</p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-              <div className="rounded-[1.25rem] border border-white/8 bg-[var(--surface-850)]/80 p-4">
-                <p className="text-xs text-[var(--ink-400)]">Status</p>
-                <p className="stat-value mt-2 text-2xl text-white">{getFeedbackLabel(result)}</p>
-              </div>
-              <div className="rounded-[1.25rem] border border-white/8 bg-[var(--surface-850)]/80 p-4">
-                <p className="text-xs text-[var(--ink-400)]">Score</p>
-                <p className="stat-value mt-2 text-2xl text-white">{result ? result.score : "--"}</p>
-              </div>
-              <div className="rounded-[1.25rem] border border-white/8 bg-[var(--surface-850)]/80 p-4">
-                <p className="text-xs text-[var(--ink-400)]">Distance</p>
-                <p className="stat-value mt-2 text-2xl text-white">{result ? result.distanceLabel : "--"}</p>
-              </div>
-            </div>
-
-            <div className="mt-5 rounded-[1.5rem] border border-white/8 bg-black/15 p-4">
-              <p className="panel-title text-white">Runtime status</p>
-              <ul className="mt-3 space-y-2 text-sm leading-7 text-[var(--ink-200)]">
-                <li>Google Maps: {googleMapsEnabled ? (mapsError ? "configured but failing" : "configured") : "missing key"}</li>
-                <li>Supabase: {supabaseEnabled ? "configured" : "not configured"}</li>
-                <li>{message}</li>
-              </ul>
-            </div>
-
-            {result ? (
-              <div className="mt-5 rounded-[1.5rem] border border-[var(--accent-400)]/20 bg-[rgba(255,143,63,0.08)] p-4 text-sm leading-7 text-[var(--ink-200)]">
-                <p className="panel-title text-white">Reveal</p>
-                <p className="mt-2">
-                  {result.answer.locationLabel}, {result.answer.region}, {result.answer.country}
-                </p>
-                <p className="text-[var(--ink-400)]">
-                  Accuracy multiplier: {(result.timeMultiplier * 100).toFixed(0)}%
-                </p>
-              </div>
-            ) : null}
+      {screen === "result" && result ? (
+        <div className="mx-auto max-w-5xl space-y-4">
+          <div className="glass-panel rounded-[1.8rem] px-5 py-4">
+            <BrandMark compact onClick={handleBackToIntro} />
           </div>
-        </aside>
-      </div>
+
+          <div className="maps-shell">
+            {googleMapsEnabled && !mapsError ? (
+              <div ref={resultMapContainerRef} className="h-[14rem] w-full md:h-[20rem]" />
+            ) : (
+              <div className="flex h-[18rem] items-center justify-center px-6 text-center text-sm leading-7 text-[var(--ink-200)] md:h-[24rem]">
+                Google Maps 키가 없거나 로드에 실패해서 결과 지도를 표시할 수 없습니다.
+              </div>
+            )}
+          </div>
+
+          <div className="glass-panel rounded-[2rem] px-6 py-8 text-center sm:px-8">
+            <p className="eyebrow text-xs text-[var(--accent-200)]">Result</p>
+            <h2 className="mt-4 text-4xl font-semibold tracking-[-0.05em] text-white sm:text-5xl">
+              {result.distanceLabel} 차이
+            </h2>
+            <p className="mt-4 text-sm leading-7 text-[var(--ink-200)]">
+              지도에서 `G`는 내가 찍은 위치, `A`는 정답 위치입니다.
+            </p>
+            {submittedByTimeout ? (
+              <p className="mt-3 text-sm leading-7 text-[var(--accent-200)]">
+                제한시간이 끝나 자동 제출되었습니다.
+              </p>
+            ) : null}
+            <div className="mt-8 flex justify-center">
+              <button
+                type="button"
+                onClick={() => void startRound(round ? [round.id] : [])}
+                disabled={loadingRound}
+                className="inline-flex min-h-12 items-center justify-center rounded-full border border-[var(--accent-400)]/40 bg-[var(--accent-400)] px-6 text-sm font-semibold text-[var(--surface-950)] transition hover:bg-[var(--accent-300)] disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/10 disabled:text-[var(--ink-400)]"
+              >
+                {loadingRound ? "불러오는 중..." : "다시하기"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

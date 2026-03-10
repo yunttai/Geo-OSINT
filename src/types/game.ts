@@ -23,10 +23,10 @@ export type PublicRound = {
   clue: string;
   country: string;
   region: string;
+  locationLabel: string;
   difficulty: RoundSeed["difficulty"];
   position: Coordinates;
   pov: RoundSeed["pov"];
-  token: string;
 };
 
 export type GuessResult = {
@@ -43,13 +43,4 @@ export type GuessResult = {
   };
   guess: Coordinates;
   feedback: "perfect" | "strong" | "decent" | "wide";
-  savedToLeaderboard: boolean;
-};
-
-export type LeaderboardEntry = {
-  rank: number;
-  username: string;
-  totalScore: number;
-  roundsPlayed: number;
-  bestRoundScore: number;
 };
