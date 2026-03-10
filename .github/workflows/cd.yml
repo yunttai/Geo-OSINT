@@ -44,10 +44,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up SSH agent
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.GCP_SSH_KEY }}
+      - name: Write SSH key
+        run: |
+          mkdir -p ~/.ssh
+          cat > ~/.ssh/gcp_deploy_key <<'EOF'
+          ${{ secrets.GCP_SSH_KEY }}
+          EOF
+          chmod 600 ~/.ssh/gcp_deploy_key
 
       - name: Add host key
         run: |
@@ -58,11 +61,11 @@ jobs:
           fi
 
       - name: Test SSH
-        run: ssh -o ConnectTimeout=10 ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} "echo OK"
+        run: ssh -i ~/.ssh/gcp_deploy_key -o IdentitiesOnly=yes -o ConnectTimeout=10 ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} "echo OK"
 
       - name: Prepare remote directory & .deploy.env
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} \
+          ssh -i ~/.ssh/gcp_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} \
             REMOTE_DIR='${{ secrets.REMOTE_APP_DIR }}' \
             DOMAIN='${{ secrets.DOMAIN }}' \
             LETSENCRYPT_EMAIL='${{ secrets.LETSENCRYPT_EMAIL }}' \
@@ -85,14 +88,14 @@ jobs:
 
       - name: Upload HTTP-only Nginx template and compose
         run: |
-          scp -o StrictHostKeyChecking=no nginx/default.http.conf.template \
+          scp -i ~/.ssh/gcp_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no nginx/default.http.conf.template \
             ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }}:"${{ env.REMOTE_DIR }}/nginx/default.conf.template"
-          scp -o StrictHostKeyChecking=no docker-compose.prod.yml \
+          scp -i ~/.ssh/gcp_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no docker-compose.prod.yml \
             ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }}:"${{ env.REMOTE_DIR }}/"
 
       - name: Start HTTP-only stack
         run: |
-          ssh ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} "
+          ssh -i ~/.ssh/gcp_deploy_key -o IdentitiesOnly=yes ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} "
             set -euo pipefail
             cd '${{ env.REMOTE_DIR }}'
 
@@ -126,7 +129,7 @@ jobs:
 
       - name: Issue / Renew SSL
         run: |
-          ssh ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} "
+          ssh -i ~/.ssh/gcp_deploy_key -o IdentitiesOnly=yes ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} "
             cd '${{ env.REMOTE_DIR }}' &&
             if docker compose version >/dev/null 2>&1; then C='docker compose'; else C='docker-compose'; fi &&
             set -a &&
@@ -141,7 +144,7 @@ jobs:
 
       - name: Provide ssl helper files for nginx
         run: |
-          ssh ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} <<'EOF'
+          ssh -i ~/.ssh/gcp_deploy_key -o IdentitiesOnly=yes ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} <<'EOF'
             set -euo pipefail
             cd '${{ env.REMOTE_DIR }}'
             if docker compose version >/dev/null 2>&1; then C='docker compose'; else C='docker-compose'; fi
@@ -174,12 +177,12 @@ jobs:
 
       - name: Upload HTTPS Nginx template
         run: |
-          scp -o StrictHostKeyChecking=no nginx/default.https.conf.template \
+          scp -i ~/.ssh/gcp_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no nginx/default.https.conf.template \
             ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }}:"${{ env.REMOTE_DIR }}/nginx/default.conf.template"
 
       - name: Apply HTTPS config & reload nginx
         run: |
-          ssh ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} <<'EOF'
+          ssh -i ~/.ssh/gcp_deploy_key -o IdentitiesOnly=yes ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} <<'EOF'
             set -euo pipefail
             cd '${{ env.REMOTE_DIR }}'
             if docker compose version >/dev/null 2>&1; then C='docker compose'; else C='docker-compose'; fi
@@ -191,7 +194,7 @@ jobs:
 
       - name: Deploy latest stack
         run: |
-          ssh ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} "
+          ssh -i ~/.ssh/gcp_deploy_key -o IdentitiesOnly=yes ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} "
             set -euo pipefail
             cd '${{ env.REMOTE_DIR }}'
 
@@ -225,7 +228,7 @@ jobs:
 
       - name: Prune images
         run: |
-          ssh ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} "docker image prune -f --filter 'until=24h' || true"
+          ssh -i ~/.ssh/gcp_deploy_key -o IdentitiesOnly=yes ${{ secrets.GCP_USER }}@${{ secrets.GCP_HOST }} "docker image prune -f --filter 'until=24h' || true"
 
   notify:
     needs: [build-and-push, deploy]
