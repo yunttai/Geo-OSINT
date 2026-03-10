@@ -1,0 +1,165 @@
+@import "tailwindcss";
+
+:root {
+  --surface-950: #08131d;
+  --surface-900: #0f1d2b;
+  --surface-850: #152637;
+  --surface-800: #1b3247;
+  --surface-700: #264865;
+  --ink-050: #f2f6f9;
+  --ink-200: #d4dde5;
+  --ink-400: #97a7b5;
+  --accent-100: #fff5d6;
+  --accent-200: #ffd87f;
+  --accent-300: #f5b83d;
+  --accent-400: #ff8f3f;
+  --accent-500: #ec5b2f;
+  --success-300: #7ae0c3;
+  --danger-300: #ff908d;
+  --shadow-color: rgba(0, 0, 0, 0.34);
+}
+
+@theme inline {
+  --color-background: var(--surface-950);
+  --color-foreground: var(--ink-050);
+  --font-sans: var(--font-space-grotesk);
+  --font-mono: var(--font-ibm-plex-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(255, 173, 85, 0.18), transparent 28%),
+    radial-gradient(circle at 80% 12%, rgba(38, 72, 101, 0.55), transparent 24%),
+    linear-gradient(160deg, #08131d 0%, #0f1d2b 48%, #08131d 100%);
+  color: var(--ink-050);
+  font-family: var(--font-space-grotesk), sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(255, 216, 127, 0.25);
+  color: var(--ink-050);
+}
+
+.page-shell {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+.ambient {
+  pointer-events: none;
+  position: absolute;
+  inset: auto;
+  z-index: 0;
+  filter: blur(60px);
+}
+
+.ambient-top {
+  top: -10rem;
+  left: -6rem;
+  height: 20rem;
+  width: 24rem;
+  background: rgba(255, 143, 63, 0.22);
+}
+
+.ambient-bottom {
+  right: -10rem;
+  bottom: -8rem;
+  height: 22rem;
+  width: 30rem;
+  background: rgba(122, 224, 195, 0.14);
+}
+
+.noise-overlay {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.08;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(circle at center, black, transparent 80%);
+}
+
+.glass-panel {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(17, 27, 39, 0.88), rgba(8, 13, 20, 0.78));
+  box-shadow:
+    0 24px 80px var(--shadow-color),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px);
+}
+
+.glass-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(255, 216, 127, 0.08), transparent 42%);
+}
+
+.grid-panel {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.stat-value {
+  font-family: var(--font-space-grotesk), sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.eyebrow {
+  font-family: var(--font-ibm-plex-mono), monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.26em;
+}
+
+.maps-shell {
+  min-height: 18rem;
+  border-radius: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at top right, rgba(255, 216, 127, 0.12), transparent 26%),
+    linear-gradient(180deg, rgba(17, 27, 39, 0.7), rgba(8, 13, 20, 0.92));
+  overflow: hidden;
+}
+
+.panel-title {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+@media (max-width: 640px) {
+  .maps-shell {
+    min-height: 14rem;
+  }
+}
